@@ -1,0 +1,283 @@
+{
+  "blinko_base_url": {
+    "description": "Blinko服务器地址",
+    "type": "string",
+    "hint": "例如: http://localhost:1111 或 https://your-blinko-domain.com",
+    "obvious_hint": true,
+    "default": "http://localhost:1111"
+  },
+  "blinko_token": {
+    "description": "Blinko API访问令牌",
+    "type": "string",
+    "hint": "在Blinko设置中生成的API Token",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "flash_session_timeout": {
+    "description": "闪念合并间隔时间(秒)",
+    "type": "int",
+    "hint": "用户停止发送消息后多长时间自动保存闪念，建议15-60秒",
+    "default": 30
+  },
+  "flash_filters": {
+    "description": "闪念过滤设置",
+    "type": "object",
+    "hint": "控制哪些内容不会被记录为闪念",
+    "items": {
+      "min_content_length": {
+        "description": "最少字数",
+        "type": "int",
+        "hint": "少于此字数的内容不会记录为闪念",
+        "default": 5
+      },
+      "ignore_prefixes": {
+        "description": "忽略前缀列表",
+        "type": "string",
+        "hint": "以这些前缀开头的内容不记录闪念，用逗号分隔，如: /t,/cmd,#",
+        "default": "/t"
+      }
+    }
+  },
+  "enable_rich_display": {
+    "description": "启用富文本图片显示",
+    "type": "bool",
+    "hint": "复杂列表将渲染为图片发送，否则使用纯文本",
+    "default": true
+  },
+  "default_categories": {
+    "description": "默认分类设置",
+    "type": "object",
+    "hint": "为不同类型笔记设置默认分类标签",
+    "items": {
+      "todo_category": {
+        "description": "TODO默认分类",
+        "type": "string",
+        "hint": "TODO项目的默认分类标签，不填则无分类",
+        "default": ""
+      },
+      "flash_category": {
+        "description": "闪念默认分类",
+        "type": "string",
+        "hint": "闪念笔记的默认分类标签，不填则无分类",
+        "default": ""
+      },
+      "note_category": {
+        "description": "笔记默认分类",
+        "type": "string",
+        "hint": "标准笔记的默认分类标签，不填则无分类",
+        "default": ""
+      }
+    }
+  },
+  "auto_features": {
+    "description": "自动化功能",
+    "type": "object",
+    "hint": "自动添加标签和处理功能",
+    "items": {
+      "auto_extract_tags": {
+        "description": "自动提取#标签",
+        "type": "bool",
+        "hint": "从消息内容中自动提取#开头的标签",
+        "default": true
+      },
+      "auto_save_attachments": {
+        "description": "自动保存附件",
+        "type": "bool",
+        "hint": "自动上传并保存图片、文件等附件到Blinko",
+        "default": true
+      },
+      "smart_todo_detection": {
+        "description": "智能TODO检测",
+        "type": "bool",
+        "hint": "检测消息中的任务关键词自动转为TODO",
+        "default": false
+      }
+    }
+  },
+  "ui_preferences": {
+    "description": "界面偏好设置",
+    "type": "object",
+    "hint": "用户界面显示相关设置",
+    "items": {
+      "list_page_size": {
+        "description": "列表每页显示数量",
+        "type": "int",
+        "hint": "查看列表时每页显示的条目数",
+        "default": 10
+      },
+      "show_timestamps": {
+        "description": "显示时间戳",
+        "type": "bool",
+        "hint": "在列表中显示笔记创建时间",
+        "default": false
+      },
+      "compact_mode": {
+        "description": "紧凑显示模式",
+        "type": "bool",
+        "hint": "使用更紧凑的列表显示格式",
+        "default": true
+      },
+      "render_quality": {
+        "description": "图片渲染质量",
+        "type": "string",
+        "hint": "图片渲染质量设置，影响图片清晰度和文件大小",
+        "options": ["high", "medium", "low"],
+        "default": "high"
+      },
+      "render_width": {
+        "description": "渲染图片宽度(像素)",
+        "type": "int",
+        "hint": "生成图片的宽度，推荐800-1200，更大更清晰但文件更大",
+        "default": 1000
+      },
+      "font_size": {
+        "description": "字体大小",
+        "type": "int",
+        "hint": "渲染文字的字体大小，推荐20-28",
+        "default": 24
+      },
+      "custom_templates": {
+        "description": "自定义模板",
+        "type": "object",
+        "hint": "自定义各种显示模板的HTML内容",
+        "items": {
+          "enable_custom": {
+            "description": "启用自定义模板",
+            "type": "bool",
+            "hint": "是否使用自定义模板替代默认模板",
+            "default": false
+          },
+          "todo_list_template": {
+            "description": "TODO列表模板",
+            "type": "text",
+            "hint": "自定义TODO列表的HTML模板，使用Jinja2语法。可用变量：todos, category",
+            "default": "",
+            "placeholder": "例如：<div>{{todos}}</div>"
+          },
+          "note_list_template": {
+            "description": "笔记列表模板", 
+            "type": "text",
+            "hint": "自定义笔记列表的HTML模板，使用Jinja2语法。可用变量：notes, category",
+            "default": "",
+            "placeholder": "例如：<div>{{notes}}</div>"
+          },
+          "search_results_template": {
+            "description": "搜索结果模板",
+            "type": "text", 
+            "hint": "自定义搜索结果的HTML模板，使用Jinja2语法。可用变量：keyword, flash_notes, note_notes, todo_notes",
+            "default": "",
+            "placeholder": "例如：<div>搜索：{{keyword}}</div>"
+          }
+        }
+      },
+      "custom_responses": {
+        "description": "自定义响应内容",
+        "type": "object",
+        "hint": "自定义各种操作的响应消息，支持占位符。留空则不响应",
+        "items": {
+          "flash_start": {
+            "description": "开始闪念记录",
+            "type": "string",
+            "hint": "开始新闪念会话时的响应。占位符：{timeout}=超时时间",
+            "default": "💡 开始闪念记录，{timeout}秒后自动保存",
+            "placeholder": "💡 开始闪念记录，{timeout}秒后自动保存"
+          },
+          "flash_add": {
+            "description": "添加闪念内容",
+            "type": "string", 
+            "hint": "向现有会话添加内容时的响应。留空则不响应",
+            "default": "💭 闪念已添加到当前会话",
+            "placeholder": "💭 闪念已添加到当前会话"
+          },
+          "flash_saved": {
+            "description": "闪念保存成功",
+            "type": "string",
+            "hint": "闪念保存成功时的响应。占位符：{tags}=标签列表",
+            "default": "✅ 闪念已保存{tags}",
+            "placeholder": "✅ 闪念已保存{tags}"
+          },
+          "todo_created": {
+            "description": "TODO创建成功",
+            "type": "string",
+            "hint": "TODO创建成功时的响应。占位符：{content}=内容, {category}=分类, {deadline}=截止时间",
+            "default": "✅ TODO已创建: {content}",
+            "placeholder": "✅ TODO已创建: {content}"
+          },
+          "todo_completed": {
+            "description": "TODO完成",
+            "type": "string",
+            "hint": "标记TODO完成时的响应。占位符：{id}=编号, {content}=内容",
+            "default": "🎉 已完成: [{id}] {content}",
+            "placeholder": "🎉 已完成: [{id}] {content}"
+          },
+          "note_created": {
+            "description": "笔记创建成功",
+            "type": "string",
+            "hint": "笔记创建成功时的响应。占位符：{content}=内容, {category}=分类",
+            "default": "📝 笔记已创建",
+            "placeholder": "📝 笔记已创建"
+          },
+          "item_deleted": {
+            "description": "项目删除成功", 
+            "type": "string",
+            "hint": "删除项目成功时的响应。占位符：{id}=编号, {type}=类型",
+            "default": "🗑️ 已删除 {type} [{id}]",
+            "placeholder": "🗑️ 已删除 {type} [{id}]"
+          },
+          "error_general": {
+            "description": "一般错误",
+            "type": "string",
+            "hint": "一般错误时的响应。占位符：{error}=错误信息",
+            "default": "❌ 操作失败: {error}",
+            "placeholder": "❌ 操作失败: {error}"
+          },
+          "error_not_found": {
+            "description": "未找到项目",
+            "type": "string",
+            "hint": "未找到指定项目时的响应。占位符：{id}=编号, {type}=类型",
+            "default": "❌ 未找到 {type} [{id}]",
+            "placeholder": "❌ 未找到 {type} [{id}]"
+          },
+          "command_unknown": {
+            "description": "未知命令",
+            "type": "string",
+            "hint": "未知命令时的响应。占位符：{command}=命令名",
+            "default": "❌ 未知命令: {command}，输入 #help 查看帮助",
+            "placeholder": "❌ 未知命令: {command}，输入 #help 查看帮助"
+          }
+        }
+      }
+    }
+  },
+  "advanced_settings": {
+    "description": "高级设置",
+    "type": "object",
+    "hint": "高级用户配置选项",
+    "items": {
+      "api_timeout": {
+        "description": "API请求超时时间(秒)",
+        "type": "int",
+        "hint": "Blinko API请求的超时时间",
+        "default": 30
+      },
+      "max_content_length": {
+        "description": "内容最大长度",
+        "type": "int",
+        "hint": "单条笔记内容的最大字符数，0表示无限制",
+        "default": 0
+      },
+      "enable_debug_mode": {
+        "description": "调试模式",
+        "type": "bool",
+        "hint": "启用详细的调试日志输出",
+        "default": false
+      },
+      "auto_retry_failed": {
+        "description": "自动重试失败请求",
+        "type": "bool",
+        "hint": "当API请求失败时自动重试",
+        "default": true
+      }
+    }
+  }
+}
