@@ -1,6 +1,9 @@
 """
-Blinko API service layer
-Blinko API 服务层，采用仓储模式
+Blinko API Service Layer - Blinko API 服务层
+本模块采用仓储模式（Repository Pattern）封装了对 Blinko API 的所有网络请求。
+- IBlinkoRepository: 定义了与笔记数据交互的统一接口。
+- BlinkoApiClient: 实现了该接口，负责具体的 HTTP 请求和响应处理。
+这种设计将数据访问逻辑与业务逻辑解耦，使得上层代码不关心数据来源是网络 API 还是数据库。
 """
 
 import aiohttp
@@ -12,21 +15,49 @@ from ..core.exceptions import BlinkoApiException
 
 
 class IBlinkoRepository(ABC):
-    """Blinko 仓储接口"""
+    """
+    Blinko 仓储接口
+    定义了所有与 Blinko 笔记服务交互的标准操作。
+    """
     
     @abstractmethod
     async def create_note(self, content: str, note_type: int = 0, tags: Optional[List[str]] = None) -> Dict[str, Any]:
-        """创建笔记"""
+        """
+        创建一个新的笔记。
+        
+        :param content: 笔记内容，Blinko 会自动从中解析 #标签。
+        :param note_type: 笔记类型（闪念、ToDo等）。
+        :param tags: 附加的标签列表（通常为空，让Blinko从内容解析）。
+        :return: API 响应字典。
+        """
         pass
     
     @abstractmethod
-    async def list_notes(self, page: int = 1, size: int = 30, note_type: int = -1, tag_id: Optional[int] = None) -> Dict[str, Any]:
-        """获取笔记列表"""
+    async def list_notes(self, page: int = 1, size: int = 30, note_type: int = -1, tag_id: Optional[int] = None, archived_status: Optional[bool] = None) -> List[Dict[str, Any]]:
+        """
+        获取笔记列表。
+        
+        :param page: 页码。
+        :param size: 每页数量。
+        :param note_type: 笔记类型过滤。
+        :param tag_id: 标签ID过滤。
+        :param archived_status: 归档状态过滤 (True: 已归档, False: 未归档, None: 所有)。
+        :return: 笔记对象字典的列表。
+        """
         pass
     
     @abstractmethod
-    async def update_note(self, note_id: int, content: str, note_type: int = 0, tags: Optional[List[str]] = None) -> Dict[str, Any]:
-        """更新笔记"""
+    async def update_note(self, note_id: int, content: Optional[str] = None, note_type: Optional[int] = None, tags: Optional[List[str]] = None, is_archived: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        更新一个已存在的笔记，支持部分更新。
+        
+        :param note_id: 要更新的笔记的唯一ID。
+        :param content: 新的笔记内容。
+        :param note_type: 新的笔记类型。
+        :param tags: 新的标签列表。
+        :param is_archived: 新的归档状态。
+        :return: API 响应字典。
+        """
         pass
     
     @abstractmethod
@@ -51,15 +82,27 @@ class IBlinkoRepository(ABC):
 
 
 class BlinkoApiClient(IBlinkoRepository):
-    """Blinko API 客户端实现"""
+    """
+    Blinko API 客户端实现
+    负责与 Blinko 后端进行实际的 HTTP 通信。
+    """
     
     def __init__(self, base_url: str, token: str):
+        """
+        初始化 API 客户端。
+        
+        :param base_url: Blinko API 的基础 URL。
+        :param token: 用于认证的 Bearer Token。
+        """
         self.base_url = base_url.rstrip('/')
         self.token = token
-        self.session = None
+        self.session: Optional[aiohttp.ClientSession] = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
-        """获取 HTTP 会话（单例模式）"""
+        """
+        获取 aiohttp.ClientSession 实例。
+        采用延迟初始化（Lazy Initialization）和单例模式，确保只在需要时创建一个共享的会话。
+        """
         if self.session is None or self.session.closed:
             headers = {
                 'Authorization': f'Bearer {self.token}',
@@ -69,7 +112,15 @@ class BlinkoApiClient(IBlinkoRepository):
         return self.session
     
     async def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
-        """统一请求方法"""
+        """
+        统一的请求方法，封装了请求的发送、错误处理和响应解析。
+        
+        :param method: HTTP 请求方法 (e.g., "GET", "POST").
+        :param endpoint: API 的端点路径 (e.g., "/v1/note/list").
+        :param kwargs: 传递给 aiohttp.ClientSession.request 的其他参数。
+        :return: 解析后的 JSON 响应字典。
+        :raises BlinkoApiException: 当网络错误或 API 返回错误状态码时抛出。
+        """
         session = await self._get_session()
         url = f"{self.base_url}/api{endpoint}"
         
@@ -91,11 +142,11 @@ class BlinkoApiClient(IBlinkoRepository):
         # 不传递tags数组，让Blinko从content中自动解析标签
         return await self._request("POST", "/v1/note/upsert", json=data)
     
-    async def list_notes(self, page: int = 1, size: int = 30, note_type: int = -1, tag_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def list_notes(self, page: int = 1, size: int = 30, note_type: int = -1, tag_id: Optional[int] = None, archived_status: Optional[bool] = None) -> List[Dict[str, Any]]:
         """获取笔记列表"""
         data = {
             "page": page,
-            "size": size * 2,  # 获取更多记录以便过滤
+            "size": size * 5,  # 获取更多记录(e.g. 150)以便在客户端进行更可靠的过滤
             "tagId": tag_id,
             "orderBy": "desc"
         }
@@ -113,17 +164,25 @@ class BlinkoApiClient(IBlinkoRepository):
         if note_type != -1:
             notes = [note for note in notes if note.get("type") == note_type]
         
+        # 新增: 按归档状态过滤
+        if archived_status is not None:
+            notes = [note for note in notes if note.get("isArchived") == archived_status]
+        
         # 限制返回数量
         return notes[:size]
     
-    async def update_note(self, note_id: int, content: str, note_type: int = 0, tags: Optional[List[str]] = None) -> Dict[str, Any]:
-        """更新笔记"""
-        data = {
-            "id": note_id,
-            "content": content,
-            "type": note_type,
-            "tags": tags or []
-        }
+    async def update_note(self, note_id: int, content: Optional[str] = None, note_type: Optional[int] = None, tags: Optional[List[str]] = None, is_archived: Optional[bool] = None) -> Dict[str, Any]:
+        """更新笔记，支持部分更新"""
+        data = {"id": note_id}
+        if content is not None:
+            data["content"] = content
+        if note_type is not None:
+            data["type"] = note_type
+        if tags is not None:
+            data["tags"] = tags
+        if is_archived is not None:
+            data["isArchived"] = is_archived
+        
         return await self._request("POST", "/v1/note/upsert", json=data)
     
     async def delete_note(self, note_id: int) -> Dict[str, Any]:

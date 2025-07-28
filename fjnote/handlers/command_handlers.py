@@ -1,6 +1,9 @@
 """
-Command handlers using Factory and Command patterns
-命令处理器，采用工厂模式和命令模式
+Command Handlers - 命令处理器
+本模块采用命令模式（Command Pattern）和工厂模式（Factory Pattern）。
+- ICommandHandler: 定义了所有命令处理器的统一接口（命令接口）。
+- 每个具体命令处理器（如 TodoCommandHandler, ListCommandHandler）封装了执行特定命令（如 #todo, #list）所需的所有逻辑（具体命令类）。
+- CommandFactory（在 command_factory.py 中）负责根据命令名称创建相应的处理器实例，解耦了请求者（主插件）与具体命令的实现。
 """
 
 import re
@@ -16,16 +19,25 @@ from ..core.exceptions import CommandException
 
 
 class ICommandHandler(ABC):
-    """命令处理器接口"""
+    """
+    命令处理器接口（Command Interface）
+    定义了所有具体命令处理器必须实现的 `handle` 方法。
+    """
     
     @abstractmethod
     async def handle(self, event: AstrMessageEvent, args: List[str]) -> MessageEventResult:
-        """处理命令"""
+        """
+        处理命令的抽象方法。
+        
+        :param event: 消息事件对象。
+        :param args: 解析后的命令参数列表。
+        :return: 一个消息事件结果，用于回复用户。
+        """
         pass
 
 
 class TodoCommandHandler(ICommandHandler):
-    """Todo 命令处理器"""
+    """'#todo' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -76,7 +88,7 @@ class TodoCommandHandler(ICommandHandler):
 
 
 class ListCommandHandler(ICommandHandler):
-    """List 命令处理器"""
+    """'#list' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -91,12 +103,16 @@ class ListCommandHandler(ICommandHandler):
             show_timestamps = self.plugin.config.get("ui_preferences", {}).get("show_timestamps", True)
             compact_mode = self.plugin.config.get("ui_preferences", {}).get("compact_mode", False)
             
-            notes = await self.plugin.api_client.list_notes(note_type=NoteType.TODO.value, size=page_size * 2)
+            # 默认只获取未归档的笔记
+            notes = await self.plugin.api_client.list_notes(
+                note_type=NoteType.TODO.value, 
+                size=page_size * 2,
+                archived_status=False
+            )
             
             todos_by_category = {}
             for i, note in enumerate(notes, 1):
                 content = note.get("content", "")
-                # 使用 blinko 的标签而不是解析内容
                 note_tags = note.get("tags", [])
                 note_category = note_tags[0].get("tag", {}).get("name", "默认") if note_tags else "默认"
                 
@@ -108,6 +124,7 @@ class ListCommandHandler(ICommandHandler):
                 
                 todo_item = TodoItem(
                     id=i,
+                    note_id=note["id"],  # 存储真实的 note_id
                     content=content,
                     category=note_category,
                     deadline=None,
@@ -149,7 +166,7 @@ class ListCommandHandler(ICommandHandler):
 
 
 class DoneCommandHandler(ICommandHandler):
-    """Done 命令处理器"""
+    """'#done' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -160,28 +177,29 @@ class DoneCommandHandler(ICommandHandler):
             return event.plain_result("请提供要完成的待办编号。格式: #done 1 2 3")
         
         try:
-            todo_ids = [int(arg) for arg in args if arg.isdigit()]
-            if not todo_ids:
+            todo_indices = [int(arg) for arg in args if arg.isdigit()]
+            if not todo_indices:
                 return event.plain_result("请提供有效的待办编号")
             
-            notes = await self.plugin.api_client.list_notes(note_type=NoteType.TODO.value, size=100)
+            # 获取当前活动的待办列表，以确保索引正确
+            active_notes = await self.plugin.api_client.list_notes(
+                note_type=NoteType.TODO.value, 
+                size=100, 
+                archived_status=False
+            )
             
             completed_todos = []
-            completed_count = 0
-            for todo_id in todo_ids:
-                if 1 <= todo_id <= len(notes):
-                    note = notes[todo_id - 1]
-                    content = note.get("content", "")
-                    if "☑" not in content:
-                        updated_content = content.replace("📝", "📝 ☑")
-                        await self.plugin.api_client.update_note(
-                            note["id"], 
-                            updated_content, 
-                            NoteType.TODO.value
-                        )
-                        completed_count += 1
-                        completed_todos.append({"id": str(todo_id), "content": content})
+            for index in todo_indices:
+                if 1 <= index <= len(active_notes):
+                    note_to_complete = active_notes[index - 1]
+                    note_id = note_to_complete["id"]
+                    content = note_to_complete.get("content", "")
+                    
+                    # 通过 API 将笔记归档
+                    await self.plugin.api_client.update_note(note_id=note_id, is_archived=True)
+                    completed_todos.append({"id": str(index), "content": content})
             
+            completed_count = len(completed_todos)
             # 使用响应管理器，支持单个和多个TODO的不同响应
             if completed_count == 1:
                 todo = completed_todos[0]
@@ -216,7 +234,7 @@ class DoneCommandHandler(ICommandHandler):
 
 
 class DeleteCommandHandler(ICommandHandler):
-    """Delete 命令处理器"""
+    """'#del' 或 '#rm' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -227,21 +245,27 @@ class DeleteCommandHandler(ICommandHandler):
             return event.plain_result("请提供要删除的待办编号。格式: #del 1 2 3")
         
         try:
-            todo_ids = [int(arg) for arg in args if arg.isdigit()]
-            if not todo_ids:
+            todo_indices = [int(arg) for arg in args if arg.isdigit()]
+            if not todo_indices:
                 return event.plain_result("请提供有效的待办编号")
             
-            notes = await self.plugin.api_client.list_notes(note_type=NoteType.TODO.value, size=100)
+            # 获取当前活动的待办列表，以确保索引正确
+            active_notes = await self.plugin.api_client.list_notes(
+                note_type=NoteType.TODO.value, 
+                size=100, 
+                archived_status=False
+            )
             
             deleted_items = []
-            deleted_count = 0
-            for todo_id in sorted(todo_ids, reverse=True):
-                if 1 <= todo_id <= len(notes):
-                    note = notes[todo_id - 1]
-                    await self.plugin.api_client.delete_note(note["id"])
-                    deleted_count += 1
-                    deleted_items.append({"id": str(todo_id), "content": note.get("content", "")})
+            # 按索引降序删除，防止删除时列表变化导致索引错乱
+            for index in sorted(todo_indices, reverse=True):
+                if 1 <= index <= len(active_notes):
+                    note_to_delete = active_notes.pop(index - 1) # 从本地列表中也移除
+                    note_id = note_to_delete["id"]
+                    await self.plugin.api_client.delete_note(note_id)
+                    deleted_items.append({"id": str(index), "content": note_to_delete.get("content", "")})
             
+            deleted_count = len(deleted_items)
             # 使用响应管理器
             if deleted_count == 1:
                 item = deleted_items[0]
@@ -276,7 +300,7 @@ class DeleteCommandHandler(ICommandHandler):
 
 
 class EditCommandHandler(ICommandHandler):
-    """Edit 命令处理器"""
+    """'#edit' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -287,45 +311,55 @@ class EditCommandHandler(ICommandHandler):
             return event.plain_result("格式错误。使用: #edit 编号 新内容")
         
         try:
-            todo_id = int(args[0])
+            index = int(args[0])
             new_content = " ".join(args[1:])
             
-            notes = await self.plugin.api_client.list_notes(note_type=NoteType.TODO.value, size=100)
+            # 获取当前活动的待办列表
+            active_notes = await self.plugin.api_client.list_notes(
+                note_type=NoteType.TODO.value, 
+                size=100, 
+                archived_status=False
+            )
             
-            if 1 <= todo_id <= len(notes):
-                note = notes[todo_id - 1]
-                old_content = note.get("content", "")
+            if 1 <= index <= len(active_notes):
+                note_to_edit = active_notes[index - 1]
+                note_id = note_to_edit["id"]
                 
+                # 提取新内容中的标签
                 tags = self.plugin.session_manager.extract_tags(new_content)
-                clean_content = self.plugin.session_manager.remove_tags(new_content)
+                clean_content = self.plugin.session_manager.remove_tags(new_content).strip()
                 
-                updated_content = f"📝 {clean_content}"
-                category = tags[0] if tags else "默认"
-                if category != "默认":
-                    updated_content += f" [分类: {category}]"
-                
-                if "☑" in old_content:
-                    updated_content = updated_content.replace("📝", "📝 ☑")
+                # 构造包含标签的完整内容，让Blinko处理
+                final_content = clean_content
+                if tags:
+                    final_content += " " + " ".join(f"#{tag}" for tag in tags)
                 
                 await self.plugin.api_client.update_note(
-                    note["id"], 
-                    updated_content, 
-                    NoteType.TODO.value
+                    note_id=note_id, 
+                    content=final_content
                 )
                 
-                return event.plain_result(f"✏️ 待办已更新: {clean_content}")
+                response = self.plugin.response_manager.todo_edited(str(index), clean_content)
+                if response:
+                    return event.plain_result(response)
+                else:
+                    return None
             else:
-                return event.plain_result(f"❌ 编号 {todo_id} 不存在")
+                error_response = self.plugin.response_manager.error_not_found(str(index), "todo")
+                if error_response:
+                    return event.plain_result(error_response)
+                else:
+                    return None
         
         except ValueError:
-            return event.plain_result("❌ 编号必须是数字")
+            return event.plain_result("❌ 编号必须是数字。")
         except Exception as e:
             logger.error(f"Edit command error: {e}")
             return event.plain_result("❌ 编辑待办失败")
 
 
 class SearchCommandHandler(ICommandHandler):
-    """Search 命令处理器"""
+    """'#search' 或 '#find' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -372,7 +406,7 @@ class SearchCommandHandler(ICommandHandler):
 
 
 class TagsCommandHandler(ICommandHandler):
-    """Tags 命令处理器"""
+    """'#tags' 或 '#cats' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -400,7 +434,7 @@ class TagsCommandHandler(ICommandHandler):
 
 
 class HelpCommandHandler(ICommandHandler):
-    """Help 命令处理器"""
+    """'#help' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -442,7 +476,7 @@ class HelpCommandHandler(ICommandHandler):
 
 
 class NoteCommandHandler(ICommandHandler):
-    """Note 命令处理器"""
+    """'#note' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin
@@ -488,7 +522,7 @@ class NoteCommandHandler(ICommandHandler):
 
 
 class NotesCommandHandler(ICommandHandler):
-    """Notes 命令处理器"""
+    """'#notes' 命令的具体处理器"""
     
     def __init__(self, plugin):
         self.plugin = plugin

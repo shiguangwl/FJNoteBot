@@ -1,191 +1,133 @@
 """
-FJNote Main Plugin
-高质量的 Blinko 笔记助手插件主文件
-采用多种设计模式确保代码的可扩展性和可维护性
+FJNote Main Plugin - 插件主入口
+本文件作为插件的入口点，核心职责是：
+1. 注册插件信息。
+2. 初始化并装配所有核心组件（如API客户端、策略、处理器等）。
+3. 监听并分发消息到相应的命令处理器或闪念会话管理器。
+4. 管理插件的生命周期，如启动后台任务和执行清理操作。
 """
 
 import asyncio
-import re
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, Any
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 import astrbot.api.message_components as Comp
 
-from .fjnote.core.models import FlashSession
-from .fjnote.core.exceptions import FJNoteException
+# 核心服务与组件
 from .fjnote.services.blinko_api import BlinkoApiClient
-from .fjnote.strategies.note_strategies import FlashNoteStrategy, TodoNoteStrategy, NoteStrategy
-from .fjnote.utils.session_manager import SessionManager, ISessionObserver
+from .fjnote.strategies.flash_strategy import FlashNoteStrategy
+from .fjnote.strategies.todo_strategy import TodoNoteStrategy
+from .fjnote.strategies.note_strategy import NoteStrategy
+from .fjnote.utils.session_manager import SessionManager
 from .fjnote.utils.template_renderer import Jinja2TemplateRenderer
 from .fjnote.utils.response_manager import ResponseManager
+from .fjnote.utils.file_uploader import FileUploader
+
+# 处理器
 from .fjnote.handlers.command_factory import CommandFactory
+from .fjnote.handlers.flash_session_handler import FlashSessionHandler
 
 
-@register("FJNote", "FjNote", "为 Blinko 笔记服务开发的插件，提供闪念记录和 ToDo 管理功能", "1.3.2", "https://github.com/FjNote/FjNoteBot")
+@register("FJNote", "FjNote", "为 Blinko 笔记服务开发的插件，提供闪念记录和 ToDo 管理功能", "1.4.0", "https://github.com/FjNote/FjNoteBot")
 class FJNotePlugin(Star):
     """
     FJNote 主插件类
-    采用观察者模式监听会话超时，策略模式处理不同类型笔记，工厂模式创建命令处理器
+    作为插件的协调中心，采用依赖注入的方式将各个模块组合在一起。
+    - 使用工厂模式（CommandFactory）创建命令处理器。
+    - 使用策略模式（NoteStrategy）处理不同类型的笔记。
+    - 使用观察者模式（SessionManager/FlashSessionHandler）处理闪念会话超时。
     """
     
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         
-        # 初始化核心组件
+        # 初始化所有核心组件
         self._init_components()
         
-        # 启动会话监控任务
+        # 启动后台任务，用于清理超时的会话计时器
         asyncio.create_task(self._start_session_monitor())
     
     def _init_components(self):
-        """初始化核心组件"""
+        """
+        初始化并装配所有核心组件。
+        这种方式使得各个组件的职责单一，易于测试和替换。
+        """
         # API 客户端（仓储模式）
         self.api_client = BlinkoApiClient(
             base_url=self.config.get("blinko_base_url", "http://localhost:1111"),
             token=self.config.get("blinko_token", "")
         )
         
+        # 文件上传工具
+        self.file_uploader = FileUploader(self.api_client)
+        
         # 笔记策略（策略模式）
         self.flash_strategy = FlashNoteStrategy(self.api_client)
         self.todo_strategy = TodoNoteStrategy(self.api_client)
         self.note_strategy = NoteStrategy(self.api_client)
         
-        # 模板渲染器（模板方法模式）- 传入配置支持渲染质量设置
+        # 模板渲染器
         self.template_renderer = Jinja2TemplateRenderer(dict(self.config))
         
-        # 响应管理器（支持自定义响应内容）
+        # 响应管理器
         self.response_manager = ResponseManager(dict(self.config))
         
-        # 会话管理器（观察者模式）
+        # 闪念会话处理器（观察者）
+        self.flash_session_handler = FlashSessionHandler(
+            self.flash_strategy,
+            self.file_uploader,
+            self.response_manager,
+            dict(self.config)
+        )
+        
+        # 会话管理器（被观察者）
         self.session_manager = SessionManager(
             timeout_seconds=self.config.get("flash_session_timeout", 30)
         )
-        self.session_manager.add_observer(self)  # 注册为观察者
+        self.session_manager.add_observer(self.flash_session_handler)  # 注册闪念处理器为观察者
         
         # 命令工厂（工厂模式）
         self.command_factory = CommandFactory(self)
     
     async def _start_session_monitor(self):
-        """启动会话监控任务"""
+        """启动会话监控任务，定期清理已完成的计时器任务以释放资源。"""
         while True:
             try:
                 await asyncio.sleep(1)
-                # 清理已完成的计时器任务
-                for user_id in list(self.session_manager.sessions.keys()):
-                    session = self.session_manager.sessions.get(user_id)
-                    if session and session.timer_task and session.timer_task.done():
-                        # 会话超时已由观察者模式处理，这里只需清理
-                        await self.session_manager.cancel_session(user_id)
+                await self.session_manager.cleanup_finished_timers()
             except Exception as e:
-                logger.error(f"Session monitor error: {e}")
-    
-    async def on_session_timeout(self, session: FlashSession):
-        """
-        会话超时回调（观察者模式）
-        当会话超时时自动保存闪念
-        """
-        try:
-            await self._save_flash_session(session)
-        except Exception as e:
-            logger.error(f"Failed to save flash session: {e}")
-    
-    async def _save_flash_session(self, session: FlashSession):
-        """保存闪念会话"""
-        try:
-            # 合并消息内容
-            content_parts = []
-            all_tags = set()
-            
-            for msg in session.messages:
-                if msg.get("type") == "text":
-                    content = msg["content"]
-                    content_parts.append(content)
-                    all_tags.update(self.session_manager.extract_tags(content))
-                elif msg.get("type") == "image":
-                    content_parts.append(f"[图片: {msg.get('filename', 'image')}]")
-                elif msg.get("type") == "file":
-                    content_parts.append(f"[文件: {msg.get('filename', 'file')}]")
-            
-            # 生成最终内容 - 保持原始内容，不移除标签
-            final_content = "\n".join(content_parts)
-            
-            # 如果有提取到的标签但内容中缺少，则添加（前面加空行以确保Blinko能识别）
-            if all_tags:
-                existing_tags_in_content = self.session_manager.extract_tags(final_content)
-                missing_tags = [tag for tag in all_tags if tag not in existing_tags_in_content]
-                if missing_tags:
-                    final_content += "\n\n" + " ".join(f"#{tag}" for tag in missing_tags)
-            
-            # 如果内容中已有标签，确保标签前有空行以便Blinko识别
-            if all_tags:
-                # 检查最后一个标签前是否有空行，如果没有则添加
-                lines = final_content.split('\n')
-                
-                # 找到包含标签的行
-                for i, line in enumerate(lines):
-                    if '#' in line:
-                        # 找到第一个标签的位置
-                        tag_match = re.search(r'#[^\s#]+', line)
-                        if tag_match:
-                            tag_start = tag_match.start()
-                            # 如果标签前有非空白字符，需要重新格式化
-                            if tag_start > 0 and line[:tag_start].strip():
-                                content_before_tags = line[:tag_start].rstrip()
-                                tags_part = line[tag_start:]
-                                
-                                # 重新构造内容：内容 + 空行 + 标签
-                                new_lines = lines[:i] + [content_before_tags, "", tags_part] + lines[i+1:]
-                                final_content = '\n'.join(new_lines)
-                                break
-            
-            # 保存闪念（直接传递包含标签的完整内容）
-            success = await self.flash_strategy.create(final_content, list(all_tags), dict(self.config))
-            
-            if success:
-                # 使用自定义响应消息
-                response = self.response_manager.flash_saved(list(all_tags))
-                if response:
-                    logger.info(f"Flash note saved for user {session.user_id}, response: {response}")
-                else:
-                    logger.info(f"Flash note saved for user {session.user_id} (no response configured)")
-            else:
-                logger.error(f"Failed to save flash note for user {session.user_id}")
-                
-        except Exception as e:
-            logger.error(f"Error saving flash session: {e}")
+                logger.error(f"会话监控任务出错: {e}")
     
     async def _handle_multimedia_message(self, event: AstrMessageEvent) -> Dict[str, Any]:
-        """处理多媒体消息"""
+        """
+        解析消息事件，提取文本和多媒体信息。
+        :return: 一个包含消息类型、内容、URL等信息的字典。
+        """
+        # 基础消息数据包含文本内容
         message_data = {
             "type": "text",
             "content": event.message_str,
             "timestamp": datetime.now().isoformat()
         }
         
-        # 检查消息组件中的多媒体内容
+        # 检查并附加多媒体信息
         for component in event.message_obj.message:
             if isinstance(component, Comp.Image):
-                message_data = {
+                message_data.update({
                     "type": "image",
-                    "content": "[图片]",
                     "url": component.url if hasattr(component, 'url') else component.file,
                     "filename": f"image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg",
-                    "timestamp": datetime.now().isoformat()
-                }
-                break
+                })
             elif hasattr(component, 'file') and hasattr(component, 'name'):
-                # 文件消息
-                message_data = {
+                message_data.update({
                     "type": "file",
-                    "content": f"[文件: {component.name}]",
+                    "url": component.file, # 假设文件组件也有一个可访问的路径或URL
                     "filename": component.name,
-                    "timestamp": datetime.now().isoformat()
-                }
-                break
+                })
         
         return message_data
     
